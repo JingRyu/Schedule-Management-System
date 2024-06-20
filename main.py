@@ -1,3 +1,7 @@
+import pika, json, uuid
+import uuid
+import sys
+
 FEATURE_NEW_EXTENSIONS_PAGE = "FeatureNewExtensions"
 ADVANCED_OPTIONS_PAGE = "AdvancedOptionsPage"
 FEATURES_INSTALLATION_PAGE = "FeaturesInstallationPage"
@@ -65,6 +69,223 @@ class Task:
         """
         self._priority = priority
 
+
+class StringValidatorClient(object):
+    """Class used to send data to/receive data from the StringValidator microservice, via the .call()
+    function. As shown in the example iteration below, .call takes one parameter, a list containing: a user's string,
+    a lower bound of acceptability, and an upper bound of acceptability."""
+
+    def __init__(self):
+        self.connection = pika.BlockingConnection(
+            pika.ConnectionParameters(host='localhost'))
+
+        self.channel = self.connection.channel()
+
+        result = self.channel.queue_declare(queue='', exclusive=True)
+        self.callback_queue = result.method.queue
+
+        self.channel.basic_consume(
+            queue=self.callback_queue,
+            on_message_callback=self.on_response,
+            auto_ack=True)
+
+        self.response = None
+        self.corr_id = None
+
+    def on_response(self, ch, method, props, body):
+        if self.corr_id == props.correlation_id:
+            self.response = body
+
+    def call(self, string_list):
+        self.response = None
+        self.corr_id = str(uuid.uuid4())
+        self.channel.basic_publish(
+            exchange='',
+            routing_key='StringValidation',
+            properties=pika.BasicProperties(
+                reply_to=self.callback_queue,
+                correlation_id=self.corr_id,
+            ),
+            body=str(string_list))
+        while self.response is None:
+            self.connection.process_data_events(time_limit=None)
+        return self.response
+
+# class DeletionClient:
+#     def __init__(self):
+#         self.connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
+#         self.channel = self.connection.channel()
+#
+#         result = self.channel.queue_declare(queue='', exclusive=True)
+#         self.callback_queue = result.method.queue
+#
+#         self.channel.basic_consume(queue=self.callback_queue,
+#                                    on_message_callback=self.on_response,
+#                                    auto_ack=True)
+#
+#         self.response = None
+#         self.corr_id = None
+#
+#     def on_response(self, ch, method, props, body):
+#         if self.corr_id == props.correlation_id:
+#             self.response = body
+#
+#     def call(self, task, userInput=None):
+#         self.response = None
+#         self.corr_id = str(uuid.uuid4())
+#         request = {'task': task, 'userInput': userInput}
+#
+#         self.channel.basic_publish(exchange='',
+#                                    routing_key='DeletionQueue',
+#                                    properties=pika.BasicProperties(
+#                                        reply_to=self.callback_queue,
+#                                        correlation_id=self.corr_id,
+#                                    ),
+#                                    body=json.dumps(request))
+#         while self.response is None:
+#             self.connection.process_data_events(time_limit=None)
+#         return json.loads(self.response)
+#
+#     def close(self):
+#         self.connection.close()
+
+
+class DeletionClient:
+    def __init__(self):
+        self.connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
+        self.channel = self.connection.channel()
+        result = self.channel.queue_declare(queue='', exclusive=True)
+        self.callback_queue = result.method.queue
+        self.channel.basic_consume(queue=self.callback_queue,
+                                   on_message_callback=self.on_response,
+                                   auto_ack=True)
+        self.response = None
+        self.corr_id = None
+
+    def on_response(self, ch, method, props, body):
+        if self.corr_id == props.correlation_id:
+            self.response = body
+
+    def call(self, task, task_data=None, userInput=None):
+        self.response = None
+        self.corr_id = str(uuid.uuid4())
+        request = {'task': task}
+        if task_data:
+            request['task_data'] = task_data
+        if userInput:
+            request['userInput'] = userInput
+
+        self.channel.basic_publish(exchange='',
+                                   routing_key='DeletionQueue',
+                                   properties=pika.BasicProperties(
+                                       reply_to=self.callback_queue,
+                                       correlation_id=self.corr_id,
+                                   ),
+                                   body=json.dumps(request))
+        while self.response is None:
+            self.connection.process_data_events(time_limit=None)
+        return json.loads(self.response)
+
+    def close(self):
+        self.connection.close()
+
+
+
+
+class QuitServerClient:
+    """Class used to send messages to the QuitServer microservice and listen for quit signals."""
+
+    def __init__(self):
+        self.connection = pika.BlockingConnection(
+            pika.ConnectionParameters(host='localhost'))
+
+        self.channel = self.connection.channel()
+
+        result = self.channel.queue_declare(queue='', exclusive=True)
+        self.callback_queue = result.method.queue
+
+        self.channel.basic_consume(
+            queue=self.callback_queue,
+            on_message_callback=self.on_response,
+            auto_ack=True)
+
+        self.response = None
+        self.corr_id = None
+
+    def on_response(self, ch, method, props, body):
+        if self.corr_id == props.correlation_id:
+            self.response = body
+            message = body.decode()
+            print(f"Server response: {message}")
+            if "shutting down" in message:
+                print("Client is exiting as per server's request.")
+                self.connection.close()
+                sys.exit()
+
+    def call(self, message):
+        self.response = None
+        self.corr_id = str(uuid.uuid4())
+        self.channel.basic_publish(
+            exchange='',
+            routing_key='QuitQueue',
+            properties=pika.BasicProperties(
+                reply_to=self.callback_queue,
+                correlation_id=self.corr_id,
+            ),
+            body=message)
+        while self.response is None:
+            self.connection.process_data_events(time_limit=None)
+        return self.response
+
+class EditClient:
+    def __init__(self):
+        self.connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
+        self.channel = self.connection.channel()
+
+        result = self.channel.queue_declare(queue='', exclusive=True)
+        self.callback_queue = result.method.queue
+
+        self.channel.basic_consume(queue=self.callback_queue,
+                                   on_message_callback=self.on_response,
+                                   auto_ack=True)
+
+        self.response = None
+        self.corr_id = None
+
+    def on_response(self, ch, method, props, body):
+        if self.corr_id == props.correlation_id:
+            self.response = body
+
+    def call(self, task, currentTask, new_content=None, new_priority=None):
+        self.response = None
+        self.corr_id = str(uuid.uuid4())
+        request = {
+            'task': task,
+            'task_data': {
+                'content': currentTask.getContent(),
+                'index': currentTask.getIndex(),
+                'belong_week': currentTask.getBelongWeek(),
+                'priority': currentTask.getPriority()
+            }
+        }
+        if new_content:
+            request['new_content'] = new_content
+        if new_priority:
+            request['new_priority'] = new_priority
+
+        self.channel.basic_publish(exchange='',
+                                   routing_key='EditQueue',
+                                   properties=pika.BasicProperties(
+                                       reply_to=self.callback_queue,
+                                       correlation_id=self.corr_id,
+                                   ),
+                                   body=json.dumps(request))
+        while self.response is None:
+            self.connection.process_data_events(time_limit=None)
+        return json.loads(self.response)
+
+    def close(self):
+        self.connection.close()
 
 def DisplayFeatureNewExtensions():
     """
@@ -276,7 +497,7 @@ def FeatureNewExtensionsInputEvent():
             AdvancedOptionsInputEvent()
             break
         elif userInput == 'Q' or userInput == 'quit':
-            break
+            QuitProgram()
         else:
             print("Invalid input, try again.")
 
@@ -299,7 +520,7 @@ def AdvancedOptionsInputEvent():
             FeaturesInstallationInputEvent()
             break
         elif userInput == 'Q' or userInput == 'quit':
-            break
+            QuitProgram()
         else:
             print("Invalid input, try again.")
 
@@ -322,7 +543,7 @@ def FeaturesInstallationInputEvent():
             currentDate = SchedulingManagementSystemMainInputEvent(customFeatureChoice)
             break
         elif userInput == 'Q' or userInput == 'quit':
-            break
+            QuitProgram()
         else:
             print("Invalid input, try again.")
 
@@ -343,7 +564,7 @@ def MailAndTutorialInputEvent(customFeatureChoice):
             currentDate = SchedulingManagementSystemMainInputEvent(customFeatureChoice)
             break
         elif userInput == 'Q' or userInput == 'quit':
-            break
+            QuitProgram()
         else:
             print("Invalid input, try again.")
 
@@ -354,11 +575,29 @@ def DailyAddTaskInputEvent(currentDate, customFeatureChoice):
     """
     Handles adding a new task for a specified date.
     """
-    userInput = input("Type your task: ")
+
     weekList = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
     for weekIndex in range(0, 7):
         if currentDate == weekList[weekIndex]:
-            newTask = Task(userInput, weekIndex + 1, currentDate)
+            stringValidator = StringValidatorClient()
+            # check string validation
+            while True:
+                userInput = input("Type your task: ")
+                test_string = userInput
+                test_lower = 0
+                test_upper = 40
+                test_body = [test_string, test_lower, test_upper]
+                send_body = json.dumps(test_body)
+                response = stringValidator.call(send_body)
+
+                jresp = json.loads(response)
+
+                if jresp == "Just Right":
+                    newTask = Task(userInput, weekIndex + 1, currentDate)
+                    break
+                else:
+                    print("Invalid input, try again.")
+
             weekTaskList[weekIndex].append(newTask)
             if customFeatureChoice == 'A':
                 DailyChangePriorityInputEvent(newTask, customFeatureChoice)
@@ -393,21 +632,117 @@ def TaskModifyInputEvent(currentTask, customFeatureChoice):
 
         print("\n")
         if userInput in ['edit', 'Edit', 'E']:
-            userInput = input("Type the modified content you cant to change into: \n")
-            currentTask.setContent(userInput)
+            if customFeatureChoice == 'A':
+                new_changed_task = ChangeTaskObjectInWeekList(currentTask, EditTask(currentTask))
+                ChangeTaskObjectInWeekList(currentTask, EditTaskPriority(new_changed_task))
+            elif customFeatureChoice == 'B':
+                ChangeTaskObjectInWeekList(currentTask, EditTask(currentTask))
             print("\n")
             DisplayDailySchedule(currentTask.getBelongWeek(), customFeatureChoice)
             DisplayCommands(DAILY_SCHEDULE_PAGE)
             DailyScheduleInputEvent(currentTask.getBelongWeek(), customFeatureChoice)
+        elif userInput in ['delete', 'Delete', 'D']:
+            userChoice = DoubleCheckDeletion()
+            if userChoice:
+                ChangeTaskObjectInWeekList(currentTask, DeleteTask(currentTask))
+            else:
+                print("Deletion canceled.")
+            print("\n")
+            DisplayDailySchedule(currentTask.getBelongWeek(), customFeatureChoice)
+            DisplayCommands(DAILY_SCHEDULE_PAGE)
+            DailyScheduleInputEvent(currentTask.getBelongWeek(), customFeatureChoice)
+        elif userInput == 'Q' or userInput == 'quit':
+            QuitProgram()
         else:
             print("Invalid input, try again.")
 
-        # elif userInput in ['back', 'Back', 'B']:
-        #     break
-        # elif userInput in ['delete', 'Delete', 'D']:
-        #     break
-        # elif userInput == 'Q' or userInput == 'quit':
-        #     break
+def DoubleCheckDeletion():
+    while True:
+        deletion_client = DeletionClient()
+        userInput = input('Do you want to delete this task? [Y/N]: ')
+
+        response = deletion_client.call(task='DoubleCheckDeletion', userInput=userInput)
+
+        if response in [True, False]:
+            return response
+        else:
+            print(response)
+
+def DeleteTask(currentTask):
+    delete_client = DeletionClient()
+    response = delete_client.call(task = 'edit_task', task_data = task_to_dict(currentTask))
+    return_task_obj = dict_to_task(response)
+    return return_task_obj
+
+def task_to_dict(task):
+    return {
+        'content': task.getContent(),
+        'index': task.getIndex(),
+        'belong_week': task.getBelongWeek(),
+        'priority': task.getPriority()
+    }
+def dict_to_task(task_dict):
+    """
+    Converts a dictionary to a Task object.
+    """
+    content = task_dict.get('_content')
+    index = task_dict.get('_index')
+    belong_week = task_dict.get('_belong_week')
+    priority = task_dict.get('_priority', 'non-urgent')  # Default to 'non-urgent' if not provided
+
+    return Task(content, index, belong_week, priority)
+
+def EditTask(currentTask):
+    stringValidator = StringValidatorClient()
+    while True:
+        userInput = input("Type the modified content (Between 1 - 40 characters): \n")
+
+        test_string = userInput
+        test_lower = 0
+        test_upper = 40
+        test_body = [test_string, test_lower, test_upper]
+        send_body = json.dumps(test_body)
+        response = stringValidator.call(send_body)
+
+        jresp = json.loads(response)
+
+        if jresp == "Just Right":
+            edit_client = EditClient()
+            response = edit_client.call('edit_task', currentTask, new_content=userInput)
+            return_task_obj = dict_to_task(response)
+            return return_task_obj
+        else:
+            print("Invalid input, try again.")
+
+def EditTaskPriority(currentTask):
+    while True:
+        userInput = input("Type the modified priority [urgent/non-urgent]: ")
+        if userInput in ['urgent', 'non-urgent']:
+            edit_client = EditClient()
+            response = edit_client.call('edit_task_priority', currentTask, new_priority=userInput)
+            return_task_obj = dict_to_task(response)
+            return return_task_obj
+        else:
+            print("Invalid input, try again.")
+
+def ChangeTaskObjectInWeekList(OriginalTaskObject, TaskObject):
+    taskIndex = OriginalTaskObject.getIndex()
+    date = OriginalTaskObject.getBelongWeek()
+
+    weekList = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+    for weekIndex in range(0, 7):
+        if date == weekList[weekIndex]:
+            weekTaskList[weekIndex][taskIndex - 1] = TaskObject
+            return weekTaskList[weekIndex][taskIndex - 1]
+
+def QuitProgram():
+    quit_server_client = QuitServerClient()
+    userInput = input("Exit program? [Y/N]: ")
+    if userInput in ['Y', 'N']:
+        response = quit_server_client.call(userInput)
+        print(response.decode())
+    else:
+        print("Invalid input, try again.")
 
 def ExceedTaskMaximun(currentDate):
     """
@@ -444,7 +779,7 @@ def DailyScheduleInputEvent(currentDate, customFeatureChoice):
             TaskModifyInputEvent(currentTask, customFeatureChoice)
             break
 
-        elif userInput in ['add', 'Add' or 'A']:
+        elif userInput in ['add', 'Add', 'A']:
             if ExceedTaskMaximun(currentDate):
                 while True:
                     userInput = input("Warning\nOver 10 tasks, this is overwhelming, "
@@ -478,7 +813,7 @@ def DailyScheduleInputEvent(currentDate, customFeatureChoice):
             MailAndTutorialInputEvent(customFeatureChoice)
             break
         elif userInput == 'Q' or userInput == 'quit':
-            break
+            QuitProgram()
         else:
             print("Invalid input, try again.")
 
@@ -511,7 +846,7 @@ def SchedulingManagementSystemMainInputEvent(customFeatureChoice):
             MailAndTutorialInputEvent(customFeatureChoice)
             break
         elif userInput == 'Q' or userInput == 'quit':
-            break
+            QuitProgram()
         else:
             print("Invalid input, try again.")
 
@@ -524,7 +859,8 @@ MondayTask = [Task('44', 1, 'Monday', 'urgent'),
               Task('66', 3, 'Monday', 'non-urgent'),
               Task('44', 1, 'Monday', 'urgent'),
               Task('55', 2, 'Monday', 'urgent'),
-              Task('66', 3, 'Monday', 'non-urgent')
+              Task('66', 3, 'Monday', 'non-urgent'),
+              Task('66', 3, 'Monday', 'urgent')
               ]
 TuesdayTask = [Task('yiyi', 1, 'Tuesday', 'urgent'),
                Task('ss', 2, 'Tuesday', 'non-urgent'),
@@ -542,3 +878,5 @@ while True:
     DisplayFeatureNewExtensions()
     DisplayCommands(FEATURE_NEW_EXTENSIONS_PAGE)
     FeatureNewExtensionsInputEvent()
+
+
